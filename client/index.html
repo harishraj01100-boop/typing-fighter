@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>TYPING FIGHTER</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="game-container"></div>
+
+  <!-- Hidden real input so mobile keyboards & IME work; desktop keyboard is primary -->
+  <input id="hidden-typing-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- UI -->
+  <script src="js/ui/UIKit.js"></script>
+
+  <!-- Systems -->
+  <script src="js/systems/WordList.js"></script>
+  <script src="js/systems/TypingSystem.js"></script>
+  <script src="js/systems/SoundManager.js"></script>
+  <script src="js/systems/NetworkClient.js"></script>
+  <script src="js/systems/AIOpponent.js"></script>
+  <script src="js/systems/CombatCalc.js"></script>
+
+  <!-- Entities -->
+  <script src="js/entities/Fighter.js"></script>
+  <script src="js/entities/Arena.js"></script>
+  <script src="js/entities/EffectsManager.js"></script>
+
+  <!-- Scenes -->
+  <script src="js/scenes/BootScene.js"></script>
+  <script src="js/scenes/MainMenuScene.js"></script>
+  <script src="js/scenes/ModeSelectScene.js"></script>
+  <script src="js/scenes/HowToPlayScene.js"></script>
+  <script src="js/scenes/SettingsScene.js"></script>
+  <script src="js/scenes/LobbyScene.js"></script>
+  <script src="js/scenes/WaitingScene.js"></script>
+  <script src="js/scenes/FightScene.js"></script>
+  <script src="js/scenes/ResultScene.js"></script>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
