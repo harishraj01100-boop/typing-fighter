@@ -20,20 +20,32 @@ const GameState = {
 const Net = {
   socket: null,
 
+  getServerUrl() {
+    if (typeof window === 'undefined') return undefined;
+    return window.SERVER_URL || localStorage.getItem('typing_fighter_server_url') || undefined;
+  },
+
   connect() {
     if (this.socket) return this.socket;
-    this.socket = io({ autoConnect: true, transports: ['websocket', 'polling'] });
+    if (typeof io === 'undefined') {
+      console.warn('Socket.IO client library is not loaded.');
+      return null;
+    }
+    const serverUrl = this.getServerUrl();
+    this.socket = serverUrl 
+      ? io(serverUrl, { autoConnect: true, transports: ['websocket', 'polling'] })
+      : io({ autoConnect: true, transports: ['websocket', 'polling'] });
     return this.socket;
   },
 
   createRoom(duration) {
-    this.connect();
-    this.socket.emit('createRoom', { name: GameState.playerName, duration });
+    const s = this.connect();
+    if (s) s.emit('createRoom', { name: GameState.playerName, duration });
   },
 
   joinRoom(code) {
-    this.connect();
-    this.socket.emit('joinRoom', { name: GameState.playerName, code });
+    const s = this.connect();
+    if (s) s.emit('joinRoom', { name: GameState.playerName, code });
   },
 
   ready() {

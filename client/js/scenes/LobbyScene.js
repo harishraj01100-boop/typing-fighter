@@ -44,22 +44,36 @@ class LobbyScene extends Phaser.Scene {
   }
 
   _createRoom() {
-    Net.connect();
+    const socket = Net.connect();
+    if (!socket) {
+      this._showError('Unable to initialize connection.');
+      return;
+    }
     Net.createRoom(GameState.duration);
   }
 
   _joinRoom() {
     if (this.joinCode.length !== 5) { this._showError('Enter a valid 5-character room code.'); return; }
-    Net.connect();
+    const socket = Net.connect();
+    if (!socket) {
+      this._showError('Unable to initialize connection.');
+      return;
+    }
     Net.joinRoom(this.joinCode);
   }
 
   _bindSocketEvents() {
     const socket = Net.connect();
+    if (!socket) return;
 
     socket.off('roomCreated');
     socket.off('roomJoined');
     socket.off('joinError');
+    socket.off('connect_error');
+
+    socket.on('connect_error', () => {
+      this._showError('Cannot reach multiplayer server.');
+    });
 
     socket.on('roomCreated', ({ code, you }) => {
       GameState.roomCode = code;
