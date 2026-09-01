@@ -10,6 +10,12 @@ class BootScene extends Phaser.Scene {
       gfx.generateTexture('__spark', 8, 8);
       gfx.destroy();
     }
+
+    // Wake up sleeping cloud server early in background
+    if (typeof Net !== 'undefined' && Net.wakeUpServer) {
+      Net.wakeUpServer();
+    }
+
     this.scene.start('MainMenuScene');
   }
 }

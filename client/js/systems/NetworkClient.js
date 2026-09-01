@@ -3,6 +3,8 @@
 // cross-scene data (selected duration, room info, last result...).
 // ============================================================
 
+const DEFAULT_CLOUD_SERVER = 'https://typing-fighter.onrender.com';
+
 const GameState = {
   playerName: (typeof localStorage !== 'undefined' && localStorage.getItem('typing_fighter_name')) || 'Player',
   duration: 120,
@@ -27,6 +29,9 @@ const Net = {
   onStatusChange(cb) {
     if (typeof cb === 'function') {
       this.statusListeners.add(cb);
+      if (this.socket && this.socket.connected) {
+        this.connectionStatus = 'connected';
+      }
       cb(this.connectionStatus, this.getActiveServerUrl());
     }
   },
@@ -55,7 +60,7 @@ const Net = {
   },
 
   getServerUrl() {
-    if (typeof window === 'undefined' || !window.location) return undefined;
+    if (typeof window === 'undefined' || !window.location) return DEFAULT_CLOUD_SERVER;
 
     // 1. URL Query Param: ?server=https://...
     try {
@@ -81,39 +86,29 @@ const Net = {
     }
 
     // 4. Default heuristics based on current hostname
-    const host = window.location.hostname;
-    const port = window.location.port;
+    const host = window.location.hostname || '';
+    const port = window.location.port || '';
 
-    // Local static servers (e.g., Live Server, Vite on 5173, Python http.server on 8000)
+    // Local static / dev servers
     if (host === 'localhost' || host === '127.0.0.1') {
       if (port && port !== '3000') {
         return `http://${host}:3000`;
       }
-      return undefined; // Same origin
+      return `http://${host}:${port || 3000}`;
     }
 
-    // If hosted on a known static-only host (Vercel, GitHub Pages, Netlify) with no saved backend URL:
-    const isStaticHost = host.endsWith('vercel.app') ||
-                         host.endsWith('github.io') ||
-                         host.endsWith('netlify.app') ||
-                         host.endsWith('pages.dev');
-
-    if (isStaticHost) {
-      // Return empty so UI can prompt user or use fallback
-      return undefined;
+    // Hosted directly on a Node server (Render, Railway, Fly, Koyeb)
+    if (host.endsWith('onrender.com') || host.endsWith('railway.app') || host.endsWith('fly.dev') || host.endsWith('koyeb.app')) {
+      return window.location.origin;
     }
 
-    // When running directly from Express (Railway, Render, Koyeb, Docker, VPS)
-    return undefined; // undefined tells socket.io to connect to window.location.origin
+    // Static hosts (Vercel, GitHub Pages, Netlify, Cloudflare Pages, etc.)
+    // Point directly to the live Render backend
+    return DEFAULT_CLOUD_SERVER;
   },
 
   getActiveServerUrl() {
-    const configured = this.getServerUrl();
-    if (configured) return configured;
-    if (typeof window !== 'undefined' && window.location) {
-      return window.location.origin;
-    }
-    return 'http://localhost:3000';
+    return this.getServerUrl() || DEFAULT_CLOUD_SERVER;
   },
 
   setServerUrl(url) {
@@ -122,7 +117,7 @@ const Net = {
       localStorage.removeItem('typing_fighter_server_url');
     } else {
       let clean = url.trim().replace(/\/+$/, '');
-      if (!/^https?:\/\//i.test(clean) && !clean.startsWith('localhost')) {
+      if (!/^https?:\/\//i.test(clean) && !clean.startsWith('localhost') && !clean.startsWith('127.0.0.1')) {
         clean = 'https://' + clean;
       }
       localStorage.setItem('typing_fighter_server_url', clean);
@@ -130,10 +125,27 @@ const Net = {
     this.reconnect();
   },
 
+  wakeUpServer(url) {
+    const target = (url || this.getActiveServerUrl()).trim().replace(/\/+$/, '');
+    try {
+      fetch(`${target}/health`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        mode: 'cors',
+        signal: AbortSignal.timeout(35000)
+      }).then(res => {
+        if (res.ok && this.connectionStatus !== 'connected') {
+          if (!this.socket || !this.socket.connected) {
+            this.reconnect();
+          }
+        }
+      }).catch(() => {});
+    } catch (e) {}
+  },
+
   reconnect() {
     if (this.socket) {
       try {
-        this.socket.removeAllListeners();
         this.socket.disconnect();
       } catch (e) {}
       this.socket = null;
@@ -142,7 +154,12 @@ const Net = {
   },
 
   connect(force = false) {
-    if (this.socket && !force) return this.socket;
+    if (this.socket && !force) {
+      if (this.socket.connected) {
+        this._setStatus('connected');
+      }
+      return this.socket;
+    }
 
     if (typeof io === 'undefined') {
       console.warn('Socket.IO client library is not loaded.');
@@ -152,32 +169,40 @@ const Net = {
 
     if (this.socket && force) {
       try {
-        this.socket.removeAllListeners();
         this.socket.disconnect();
       } catch (e) {}
       this.socket = null;
     }
 
     this._setStatus('connecting');
-    const serverUrl = this.getServerUrl();
+    const serverUrl = this.getActiveServerUrl();
+
+    // Trigger background wake-up ping for sleeping Render instances
+    this.wakeUpServer(serverUrl);
 
     try {
       const opts = {
         autoConnect: true,
         transports: ['websocket', 'polling'],
-        timeout: 10000,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
+        timeout: 25000,
+        reconnection: true,
+        reconnectionAttempts: 20,
+        reconnectionDelay: 1500,
+        reconnectionDelayMax: 5000
       };
 
-      this.socket = serverUrl ? io(serverUrl, opts) : io(opts);
+      this.socket = io(serverUrl, opts);
+
+      if (this.socket.connected) {
+        this._setStatus('connected');
+      }
 
       this.socket.on('connect', () => {
         this._setStatus('connected');
       });
 
       this.socket.on('connect_error', (err) => {
-        console.warn('Socket connect_error:', err?.message || err);
+        console.warn('Socket connect_error to', serverUrl, ':', err?.message || err);
         this._setStatus('error');
       });
 
@@ -195,7 +220,9 @@ const Net = {
 
   async testConnection(url) {
     let target = (url || this.getActiveServerUrl()).trim().replace(/\/+$/, '');
-    if (!/^https?:\/\//i.test(target)) target = 'https://' + target;
+    if (!/^https?:\/\//i.test(target) && !target.startsWith('localhost') && !target.startsWith('127.0.0.1')) {
+      target = 'https://' + target;
+    }
 
     const start = performance.now();
     try {
@@ -203,7 +230,7 @@ const Net = {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         mode: 'cors',
-        signal: AbortSignal.timeout(6000)
+        signal: AbortSignal.timeout(12000)
       });
       if (res.ok) {
         const data = await res.json();

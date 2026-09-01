@@ -248,37 +248,60 @@ class LobbyScene extends Phaser.Scene {
   }
 
   _buildServerTag(w, h) {
-    const serverUrl = Net.getActiveServerUrl();
-    const shortUrl = serverUrl.replace(/^https?:\/\//i, '').slice(0, 24);
-    
-    this.serverTag = this.add.text(w / 2, h * 0.74, `Server: ${shortUrl}`, {
-      fontFamily: 'Rajdhani, sans-serif', fontSize: '13px', fontStyle: '600', color: '#8fa3c7'
-    }).setOrigin(0.5);
-
-    this._statusHandler = (status) => {
+    const updateServerTag = (status, url) => {
       if (!this.serverTag || !this.serverTag.active) return;
+      const activeUrl = url || Net.getActiveServerUrl();
+      const shortUrl = activeUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '').slice(0, 36);
       if (status === 'connected') {
         this.serverTag.setText(`● Server: ${shortUrl} (Connected)`).setColor('#35ff9e');
+        if (this.errorText && this.errorText.text && this.errorText.text.includes('Connecting')) {
+          this._showError('');
+        }
       } else if (status === 'connecting') {
         this.serverTag.setText(`● Server: ${shortUrl} (Connecting...)`).setColor('#ffcc33');
       } else if (status === 'error') {
-        this.serverTag.setText(`● Server: ${shortUrl} (Offline)`).setColor('#ff4d6d');
+        this.serverTag.setText(`● Server: ${shortUrl} (Offline / Waking up...)`).setColor('#ff4d6d');
       }
     };
+
+    const serverUrl = Net.getActiveServerUrl();
+    const shortUrl = serverUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '').slice(0, 36);
+    this.serverTag = this.add.text(w / 2, h * 0.74, `● Server: ${shortUrl} (Connecting...)`, {
+      fontFamily: 'Rajdhani, sans-serif', fontSize: '13px', fontStyle: '600', color: '#ffcc33'
+    }).setOrigin(0.5);
+
+    this._statusHandler = (status, url) => updateServerTag(status, url);
     Net.onStatusChange(this._statusHandler);
   }
 
   _showError(msg, showConfigBtn = false) {
     if (this.errorText) this.errorText.destroy();
+    if (this.serverActionBtns) {
+      this.serverActionBtns.forEach(b => b.destroy());
+      this.serverActionBtns = null;
+    }
     if (this.serverConfigBtn) this.serverConfigBtn.destroy();
 
     const { width: w, height: h } = this.scale;
     this.errorText = this.add.text(w / 2, h * 0.81, msg, {
-      fontFamily: 'Rajdhani, sans-serif', fontSize: '16px', fontStyle: '700', color: '#ff4d6d'
+      fontFamily: 'Rajdhani, sans-serif', fontSize: '15px', fontStyle: '700', color: '#ff4d6d'
     }).setOrigin(0.5);
 
     if (showConfigBtn) {
-      this.serverConfigBtn = UIKit.button(this, w / 2, h * 0.88, 'CONFIGURE SERVER URL', () => {
+      const retryBtn = UIKit.button(this, w / 2 - 95, h * 0.88, 'RETRY / WAKE UP', () => {
+        this._showError('Pinging cloud server (waking up instance)...');
+        Net.wakeUpServer();
+        Net.testConnection().then(res => {
+          if (res.ok) {
+            this._showError('');
+            Net.reconnect();
+          } else {
+            this._showError(`Server still waking up: ${res.error}. Please wait 10s and retry.`, true);
+          }
+        });
+      }, { width: 175, height: 36, fontSize: 13 });
+
+      const configBtn = UIKit.button(this, w / 2 + 95, h * 0.88, 'SET SERVER URL', () => {
         const current = Net.getServerUrl() || Net.getActiveServerUrl();
         UIKit.inputModal(this, {
           title: 'MULTIPLAYER SERVER URL',
@@ -292,7 +315,6 @@ class LobbyScene extends Phaser.Scene {
               Net.testConnection().then(res => {
                 if (res.ok) {
                   this._showError('');
-                  if (this.serverTag) this.serverTag.setText(`● Connected: ${Net.getActiveServerUrl().slice(0, 24)}`).setColor('#35ff9e');
                 } else {
                   this._showError(`Cannot connect: ${res.error}`, true);
                 }
@@ -300,7 +322,9 @@ class LobbyScene extends Phaser.Scene {
             }
           }
         });
-      }, { width: 260, height: 38, fontSize: 14 });
+      }, { width: 175, height: 36, fontSize: 13 });
+
+      this.serverActionBtns = [retryBtn, configBtn];
     }
   }
 
@@ -338,18 +362,6 @@ class LobbyScene extends Phaser.Scene {
     socket.off('roomCreated');
     socket.off('roomJoined');
     socket.off('joinError');
-    socket.off('connect_error');
-    socket.off('connect');
-
-    socket.on('connect', () => {
-      if (this.errorText && this.errorText.text.includes('Connecting')) {
-        this._showError('');
-      }
-    });
-
-    socket.on('connect_error', () => {
-      this._showError(`Cannot reach server (${Net.getActiveServerUrl()}).`, true);
-    });
 
     socket.on('roomCreated', ({ code, you }) => {
       GameState.roomCode = code;
@@ -375,6 +387,10 @@ class LobbyScene extends Phaser.Scene {
     if (hidden && this._onHiddenInput) hidden.removeEventListener('input', this._onHiddenInput);
     if (this._blinkTimer) this._blinkTimer.remove();
     if (this._statusHandler) Net.offStatusChange(this._statusHandler);
+    if (this.serverActionBtns) {
+      this.serverActionBtns.forEach(b => b.destroy());
+      this.serverActionBtns = null;
+    }
     if (this.arena) this.arena.destroy();
   }
 }

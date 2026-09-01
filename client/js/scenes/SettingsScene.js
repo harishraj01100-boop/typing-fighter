@@ -162,7 +162,14 @@ class SettingsScene extends Phaser.Scene {
     UIKit.button(this, x + 90, y + 135, 'RESET DEFAULT', () => {
       Net.setServerUrl('');
       this.serverUrlText.setText(getDisplayUrl());
-      this.serverStatusBadge.setText('Reset to default').setColor('#8fa3c7');
+      this.serverStatusBadge.setText('● Connecting...').setColor('#ffcc33');
+      Net.testConnection().then(res => {
+        if (res.ok) {
+          this.serverStatusBadge.setText(`● ONLINE (${res.latency}ms)`).setColor('#35ff9e');
+        } else {
+          this.serverStatusBadge.setText(`● UNREACHABLE: ${res.error}`).setColor('#ff4d6d');
+        }
+      });
     }, { width: 150, height: 40, fontSize: 14 });
   }
 
