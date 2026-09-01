@@ -7,7 +7,8 @@ function registerSocketHandlers(io, roomManager) {
       const room = roomManager.createRoom();
       const safeDuration = ALLOWED_DURATIONS.includes(duration) ? duration : 120;
       room.setDuration(safeDuration);
-      const player = room.addPlayer(socket.id, name);
+      const safeName = (name || 'Player 1').trim().slice(0, 14);
+      const player = room.addPlayer(socket.id, safeName);
       socket.join(room.code);
       socket.data.roomCode = room.code;
 
@@ -15,7 +16,13 @@ function registerSocketHandlers(io, roomManager) {
     });
 
     socket.on('joinRoom', ({ name, code }) => {
-      const room = roomManager.getRoom(code);
+      const cleanCode = (code || '').trim().toUpperCase();
+      if (!cleanCode || cleanCode.length !== 5) {
+        socket.emit('joinError', { message: 'Invalid room code. Please enter a 5-letter code.' });
+        return;
+      }
+
+      const room = roomManager.getRoom(cleanCode);
       if (!room) {
         socket.emit('joinError', { message: 'Room not found. Check the code and try again.' });
         return;
@@ -25,11 +32,17 @@ function registerSocketHandlers(io, roomManager) {
         return;
       }
       if (room.status !== 'waiting') {
-        socket.emit('joinError', { message: 'Match already in progress.' });
+        socket.emit('joinError', { message: 'Match is already in progress in that room.' });
         return;
       }
 
-      const player = room.addPlayer(socket.id, name);
+      const safeName = (name || `Player 2`).trim().slice(0, 14);
+      const player = room.addPlayer(socket.id, safeName);
+      if (!player) {
+        socket.emit('joinError', { message: 'Failed to join room. Please try again.' });
+        return;
+      }
+
       socket.join(room.code);
       socket.data.roomCode = room.code;
 
@@ -57,7 +70,6 @@ function registerSocketHandlers(io, roomManager) {
     });
 
     // Lightweight live progress broadcast so the opponent sees you typing
-    // (purely cosmetic - never trusted for damage/results)
     socket.on('typingProgress', ({ chars }) => {
       const room = roomManager.findRoomBySocket(socket.id);
       if (!room) return;
@@ -86,21 +98,24 @@ function registerSocketHandlers(io, roomManager) {
     });
   });
 
-  // Safety net cleanup for orphaned rooms
+  // Safety net cleanup for orphaned rooms every 60 seconds
   setInterval(() => roomManager.cleanupStale(), 60000);
 }
 
 function cleanupSocket(socket, io, roomManager) {
   const room = roomManager.findRoomBySocket(socket.id);
   if (!room) return;
-  room.handleDisconnect(socket.id);
-  io.to(room.code).emit('roomUpdate', room.publicState());
-  io.to(room.code).emit('opponentLeft', { playerId: socket.id });
+
+  const leavingPlayerId = socket.id;
+  room.handleDisconnect(leavingPlayerId);
   socket.leave(room.code);
 
-  // If nobody is left connected, drop the room from memory immediately
-  if (room.players.every(p => !p.connected)) {
+  // If room is now empty or has no connected players, remove it completely
+  if (room.players.length === 0 || room.players.every(p => !p.connected)) {
     roomManager.removeRoom(room.code);
+  } else {
+    io.to(room.code).emit('opponentLeft', { playerId: leavingPlayerId });
+    io.to(room.code).emit('roomUpdate', room.publicState());
   }
 }
 

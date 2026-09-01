@@ -101,5 +101,229 @@ const UIKit = {
     };
     draw(1);
     return { bg, fill, draw };
+  },
+
+  inputModal(scene, opts = {}) {
+    const { width: w, height: h } = scene.scale;
+    const title = opts.title || 'ENTER VALUE';
+    const subtitle = opts.subtitle || '';
+    let value = (opts.value !== undefined && opts.value !== null ? opts.value : '').toString();
+    const maxLength = opts.maxLength || 120;
+    const readOnly = !!opts.readOnly;
+    const confirmText = opts.confirmText || (readOnly ? 'OK' : 'CONFIRM');
+    const cancelText = opts.cancelText || 'CANCEL';
+    const placeholder = opts.placeholder || '';
+
+    // Container for all modal elements
+    const modalContainer = scene.add.container(0, 0).setDepth(2000);
+
+    // Semi-transparent backdrop that blocks underlying clicks
+    const backdrop = scene.add.graphics();
+    backdrop.fillStyle(0x020408, 0.85);
+    backdrop.fillRect(0, 0, w, h);
+    backdrop.setInteractive(new Phaser.Geom.Rectangle(0, 0, w, h), Phaser.Geom.Rectangle.Contains);
+    modalContainer.add(backdrop);
+
+    // Modal Card
+    const cardW = Math.min(540, w * 0.9);
+    const cardH = 260;
+    const cardX = w / 2;
+    const cardY = h / 2;
+
+    const cardBg = scene.add.graphics();
+    cardBg.fillStyle(0x0c101c, 0.98);
+    cardBg.fillRoundedRect(cardX - cardW / 2, cardY - cardH / 2, cardW, cardH, 14);
+    cardBg.lineStyle(2, UIKit.COLORS.accent, 0.9);
+    cardBg.strokeRoundedRect(cardX - cardW / 2, cardY - cardH / 2, cardW, cardH, 14);
+    modalContainer.add(cardBg);
+
+    // Title & Subtitle
+    const titleText = scene.add.text(cardX, cardY - cardH / 2 + 34, title, {
+      fontFamily: 'Orbitron, sans-serif',
+      fontSize: '20px',
+      fontStyle: '800',
+      color: '#eaf6ff'
+    }).setOrigin(0.5);
+    modalContainer.add(titleText);
+
+    if (subtitle) {
+      const subText = scene.add.text(cardX, cardY - cardH / 2 + 64, subtitle, {
+        fontFamily: 'Rajdhani, sans-serif',
+        fontSize: '14px',
+        fontStyle: '600',
+        color: '#8fa3c7',
+        align: 'center',
+        wordWrap: { width: cardW - 50 }
+      }).setOrigin(0.5);
+      modalContainer.add(subText);
+    }
+
+    // Input Box
+    const inputW = cardW - 60;
+    const inputH = 46;
+    const inputY = cardY + 5;
+    const inputBg = scene.add.graphics();
+    inputBg.fillStyle(0x06080f, 1);
+    inputBg.fillRoundedRect(cardX - inputW / 2, inputY - inputH / 2, inputW, inputH, 8);
+    inputBg.lineStyle(2, UIKit.COLORS.accent, 0.7);
+    inputBg.strokeRoundedRect(cardX - inputW / 2, inputY - inputH / 2, inputW, inputH, 8);
+    modalContainer.add(inputBg);
+
+    const valText = scene.add.text(cardX - inputW / 2 + 14, inputY, '', {
+      fontFamily: 'Rajdhani, sans-serif',
+      fontSize: '18px',
+      fontStyle: '700',
+      color: '#35e6ff'
+    }).setOrigin(0, 0.5);
+    modalContainer.add(valText);
+
+    const cursor = scene.add.text(cardX - inputW / 2 + 14, inputY - 1, '|', {
+      fontFamily: 'Rajdhani, sans-serif',
+      fontSize: '20px',
+      color: '#35e6ff'
+    }).setOrigin(0, 0.5);
+    if (!readOnly) modalContainer.add(cursor);
+
+    const cursorTween = scene.tweens.add({
+      targets: cursor,
+      alpha: 0,
+      duration: 350,
+      yoyo: true,
+      repeat: -1
+    });
+
+    const updateDisplay = (newVal) => {
+      value = newVal.slice(0, maxLength);
+      let disp = value;
+      if (!disp && placeholder && !readOnly) {
+        valText.setText(placeholder).setColor('#4c5a78');
+        cursor.x = cardX - inputW / 2 + 14;
+        return;
+      }
+      valText.setColor('#35e6ff');
+      valText.setText(disp);
+      // If overflowing width, visually trim display
+      const maxTextW = inputW - 32;
+      if (valText.width > maxTextW) {
+        while (valText.width > maxTextW && disp.length > 3) {
+          disp = disp.slice(1);
+          valText.setText('...' + disp);
+        }
+      }
+      cursor.x = cardX - inputW / 2 + 14 + (valText.text ? valText.width + 2 : 0);
+    };
+    updateDisplay(value);
+
+    // Mobile / hidden input support
+    const hiddenInput = document.getElementById('hidden-typing-input');
+    let onHiddenInput = null;
+    if (hiddenInput && !readOnly) {
+      hiddenInput.value = value;
+      hiddenInput.focus({ preventScroll: true });
+      onHiddenInput = () => {
+        updateDisplay(hiddenInput.value);
+      };
+      hiddenInput.addEventListener('input', onHiddenInput);
+    }
+
+    let isClosing = false;
+    const closeModal = (confirmed) => {
+      if (isClosing) return;
+      isClosing = true;
+      cursorTween.stop();
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('paste', onPaste);
+      if (hiddenInput && onHiddenInput) {
+        hiddenInput.removeEventListener('input', onHiddenInput);
+        hiddenInput.blur();
+      }
+
+      scene.tweens.add({
+        targets: modalContainer,
+        alpha: 0,
+        scale: 0.95,
+        duration: 100,
+        onComplete: () => {
+          modalContainer.destroy();
+          if (confirmed && opts.onConfirm) {
+            opts.onConfirm(value);
+          } else if (!confirmed && opts.onCancel) {
+            opts.onCancel();
+          }
+        }
+      });
+    };
+
+    const onKeyDown = (e) => {
+      e.stopPropagation();
+      if (readOnly) {
+        if (e.key === 'Escape' || e.key === 'Enter') closeModal(true);
+        return;
+      }
+      if (e.key === 'Enter') {
+        closeModal(true);
+      } else if (e.key === 'Escape') {
+        closeModal(false);
+      } else if (e.key === 'Backspace') {
+        updateDisplay(value.slice(0, -1));
+        if (hiddenInput) hiddenInput.value = value;
+        if (window.AudioSystem) AudioSystem.keyPress();
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (value.length < maxLength) {
+          updateDisplay(value + e.key);
+          if (hiddenInput) hiddenInput.value = value;
+          if (window.AudioSystem) AudioSystem.keyPress();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+
+    const onPaste = (e) => {
+      if (readOnly) return;
+      e.stopPropagation();
+      const paste = (e.clipboardData || window.clipboardData)?.getData('text');
+      if (paste) {
+        updateDisplay(value + paste.trim());
+        if (hiddenInput) hiddenInput.value = value;
+        if (window.AudioSystem) AudioSystem.keyPress();
+      }
+    };
+    window.addEventListener('paste', onPaste);
+
+    // Modal Buttons
+    const btnY = cardY + cardH / 2 - 38;
+    if (readOnly) {
+      const okBtn = UIKit.button(scene, cardX, btnY, confirmText, () => closeModal(true), {
+        width: 160, height: 38, fontSize: 15
+      });
+      modalContainer.add(okBtn);
+    } else {
+      const cancelBtn = UIKit.button(scene, cardX - 95, btnY, cancelText, () => closeModal(false), {
+        width: 150, height: 38, fontSize: 15
+      });
+      const confirmBtn = UIKit.button(scene, cardX + 95, btnY, confirmText, () => closeModal(true), {
+        width: 150, height: 38, fontSize: 15
+      });
+      modalContainer.add([cancelBtn, confirmBtn]);
+    }
+
+    // Interactive card to refocus hidden input on click
+    const cardZone = scene.add.zone(cardX, cardY, cardW, cardH).setInteractive();
+    cardZone.on('pointerdown', () => {
+      if (hiddenInput && !readOnly) hiddenInput.focus({ preventScroll: true });
+    });
+    modalContainer.add(cardZone);
+
+    modalContainer.setAlpha(0);
+    modalContainer.setScale(0.95);
+    scene.tweens.add({
+      targets: modalContainer,
+      alpha: 1,
+      scale: 1,
+      duration: 120,
+      ease: 'Quad.easeOut'
+    });
+
+    return modalContainer;
   }
 };

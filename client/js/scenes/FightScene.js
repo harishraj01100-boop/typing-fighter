@@ -42,10 +42,10 @@ class FightScene extends Phaser.Scene {
       this._bindOnlineEvents();
       if (GameState.pendingCountdown) {
         GameState.pendingCountdown = false;
+        this.countdownText.setText('3').setScale(0.5).setAlpha(1);
+        this.tweens.add({ targets: this.countdownText, scale: 1, duration: 260, ease: 'Back.easeOut' });
+        AudioSystem.countdownBeep();
       }
-      // countdownStart may already have fired in WaitingScene right before
-      // transition; server will still emit countdownTick/matchStart which
-      // we listen for below, so nothing else to do here.
     }
   }
 
@@ -435,8 +435,12 @@ class FightScene extends Phaser.Scene {
     this.matchOver = true;
     this.typing.disable();
 
-    const me = players.find(p => p.id === GameState.you?.id);
-    const won = winnerId === GameState.you?.id;
+    const playerList = players || [];
+    const me = playerList.find(p => p.id === GameState.you?.id);
+    const opp = playerList.find(p => p.id !== GameState.you?.id);
+    if (opp && opp.name) this.oppName = opp.name;
+
+    const won = winnerId ? winnerId === GameState.you?.id : false;
     const draw = winnerId === null;
 
     const winnerFighter = won ? this.playerFighter : this.oppFighter;
@@ -468,5 +472,13 @@ class FightScene extends Phaser.Scene {
     if (this.arena) this.arena.destroy();
     if (this._aiHandle) clearTimeout(this._aiHandle);
     if (this.localTimer) this.localTimer.remove();
+
+    if (this.mode === 'online') {
+      const socket = Net.connect();
+      if (socket) {
+        ['countdownStart','countdownTick','matchStart','newWord','attackResult','typingMiss','timerUpdate','matchEnd','opponentTyping','opponentLeft']
+          .forEach(evt => socket.off(evt));
+      }
+    }
   }
 }

@@ -7,7 +7,7 @@ const NEXT_WORD_DELAY_MS = 900;
 
 class Room {
   constructor(code, io) {
-    this.code = code;
+    this.code = (code || '').toUpperCase();
     this.io = io;
     this.players = []; // { id, socketId, name, hp, combo, maxCombo, correctWords, totalWords, totalDamage, ready, connected }
     this.duration = 120; // seconds, set at creation
@@ -19,16 +19,26 @@ class Room {
     this.recentWords = [];
     this.timeLeft = 0;
     this.timerHandle = null;
+    this.countdownHandle = null;
+    this.nextWordHandle = null;
     this.wordLockResolved = false;
     this.createdAt = Date.now();
   }
 
   addPlayer(socketId, name) {
     if (this.players.length >= 2) return null;
+    // Check if player already exists
+    const existing = this.getPlayer(socketId);
+    if (existing) {
+      existing.connected = true;
+      if (name) existing.name = name;
+      return existing;
+    }
+
     const player = {
       id: socketId,
       socketId,
-      name: name || `Player${this.players.length + 1}`,
+      name: (name || `Player ${this.players.length + 1}`).trim().slice(0, 14),
       hp: MAX_HP,
       combo: 0,
       maxCombo: 0,
@@ -42,6 +52,15 @@ class Room {
     return player;
   }
 
+  removePlayer(socketId) {
+    const idx = this.players.findIndex(p => p.socketId === socketId);
+    if (idx !== -1) {
+      const removed = this.players.splice(idx, 1)[0];
+      return removed;
+    }
+    return null;
+  }
+
   getPlayer(socketId) {
     return this.players.find(p => p.socketId === socketId);
   }
@@ -51,11 +70,11 @@ class Room {
   }
 
   isFull() {
-    return this.players.length === 2;
+    return this.players.length >= 2;
   }
 
   allReady() {
-    return this.players.length === 2 && this.players.every(p => p.ready);
+    return this.players.length === 2 && this.players.every(p => p.ready && p.connected);
   }
 
   setDuration(seconds) {
@@ -74,35 +93,53 @@ class Room {
       duration: this.duration,
       timeLeft: this.timeLeft,
       players: this.players.map(p => ({
-        id: p.id, name: p.name, hp: p.hp, combo: p.combo, maxCombo: p.maxCombo,
-        ready: p.ready, connected: p.connected
+        id: p.id,
+        name: p.name,
+        hp: p.hp,
+        combo: p.combo,
+        maxCombo: p.maxCombo,
+        ready: p.ready,
+        connected: p.connected
       }))
     };
   }
 
   startCountdown() {
+    if (this.status === 'countdown' || this.status === 'fighting') return;
     this.status = 'countdown';
     this.broadcast('countdownStart', { seconds: 3 });
+
     let n = 3;
     const tick = () => {
+      if (this.status !== 'countdown') return;
       if (n <= 0) {
         this.startMatch();
         return;
       }
       this.broadcast('countdownTick', { value: n });
       n--;
-      setTimeout(tick, 1000);
+      this.countdownHandle = setTimeout(tick, 1000);
     };
-    setTimeout(tick, 900);
+    this.countdownHandle = setTimeout(tick, 900);
   }
 
   startMatch() {
+    if (this.status === 'fighting') return;
     this.status = 'fighting';
     this.timeLeft = this.duration;
-    this.players.forEach(p => { p.hp = MAX_HP; p.combo = 0; p.maxCombo = 0; p.correctWords = 0; p.totalWords = 0; p.totalDamage = 0; });
+    this.players.forEach(p => {
+      p.hp = MAX_HP;
+      p.combo = 0;
+      p.maxCombo = 0;
+      p.correctWords = 0;
+      p.totalWords = 0;
+      p.totalDamage = 0;
+    });
+
     this.broadcast('matchStart', this.publicState());
     this.issueNextWord();
 
+    if (this.timerHandle) clearInterval(this.timerHandle);
     this.timerHandle = setInterval(() => {
       if (this.status !== 'fighting') return;
       this.timeLeft -= 1;
@@ -190,13 +227,16 @@ class Room {
       return;
     }
 
-    setTimeout(() => this.issueNextWord(), NEXT_WORD_DELAY_MS);
+    if (this.nextWordHandle) clearTimeout(this.nextWordHandle);
+    this.nextWordHandle = setTimeout(() => this.issueNextWord(), NEXT_WORD_DELAY_MS);
   }
 
   endMatch(reason, winnerId = null) {
     if (this.status === 'ended') return;
     this.status = 'ended';
     if (this.timerHandle) clearInterval(this.timerHandle);
+    if (this.countdownHandle) clearTimeout(this.countdownHandle);
+    if (this.nextWordHandle) clearTimeout(this.nextWordHandle);
 
     let winner = winnerId;
     if (!winner) {
@@ -204,6 +244,8 @@ class Room {
         const [a, b] = this.players;
         if (a.hp === b.hp) winner = null; // draw
         else winner = a.hp > b.hp ? a.socketId : b.socketId;
+      } else if (this.players.length === 1) {
+        winner = this.players[0].socketId;
       }
     }
 
@@ -226,14 +268,27 @@ class Room {
   handleDisconnect(socketId) {
     const player = this.getPlayer(socketId);
     if (player) player.connected = false;
+
     if (this.status === 'fighting') {
       const opponent = this.getOpponent(socketId);
       if (opponent) this.endMatch('opponent_disconnected', opponent.socketId);
+    } else if (this.status === 'countdown') {
+      // Cancel countdown if someone disconnected
+      if (this.countdownHandle) clearTimeout(this.countdownHandle);
+      this.status = 'waiting';
+      this.players.forEach(p => { p.ready = false; });
+      this.removePlayer(socketId);
+      this.broadcast('roomUpdate', this.publicState());
+    } else if (this.status === 'waiting') {
+      // In waiting room, remove disconnected player to free the slot
+      this.removePlayer(socketId);
     }
   }
 
   destroy() {
     if (this.timerHandle) clearInterval(this.timerHandle);
+    if (this.countdownHandle) clearTimeout(this.countdownHandle);
+    if (this.nextWordHandle) clearTimeout(this.nextWordHandle);
   }
 }
 

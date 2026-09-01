@@ -12,7 +12,14 @@ class ResultScene extends Phaser.Scene {
     const title = UIKit.title(this, w / 2, h * 0.2, headline, 64);
     title.setColor(headlineColor);
 
-    const subLabel = result.draw ? 'IT\'S A TIE' : (result.won ? `${(GameState.playerName || 'PLAYER 1').toUpperCase()} WINS` : `${(result.opponentName || 'OPPONENT').toUpperCase()} WINS`);
+    let subLabel;
+    if (result.reason === 'opponent_disconnected') {
+      subLabel = 'OPPONENT DISCONNECTED / FORFEIT';
+    } else if (result.draw) {
+      subLabel = 'IT\'S A TIE';
+    } else {
+      subLabel = result.won ? `${(GameState.playerName || 'PLAYER 1').toUpperCase()} WINS` : `${(result.opponentName || 'OPPONENT').toUpperCase()} WINS`;
+    }
     UIKit.subtitle(this, w / 2, h * 0.2 + 50, subLabel, 20);
 
     UIKit.panel(this, w / 2, h * 0.5, 420, 220, 14);

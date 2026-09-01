@@ -4,7 +4,7 @@
 // ============================================================
 
 const GameState = {
-  playerName: 'Player',
+  playerName: (typeof localStorage !== 'undefined' && localStorage.getItem('typing_fighter_name')) || 'Player',
   duration: 120,
   mode: 'practice',       // 'practice' | 'online'
   aiDifficulty: 'medium',
@@ -14,28 +14,206 @@ const GameState = {
   opponentName: 'Opponent',
   lastResult: null,
   musicVolume: 0.35,
-  sfxVolume: 0.6
+  sfxVolume: 0.6,
+  pendingCountdown: false
 };
 
 const Net = {
   socket: null,
+  connectionStatus: 'disconnected', // 'connected' | 'connecting' | 'disconnected' | 'error'
+  lastLatency: null,
+  statusListeners: new Set(),
 
-  getServerUrl() {
-    if (typeof window === 'undefined') return undefined;
-    return window.SERVER_URL || localStorage.getItem('typing_fighter_server_url') || undefined;
+  onStatusChange(cb) {
+    if (typeof cb === 'function') {
+      this.statusListeners.add(cb);
+      cb(this.connectionStatus, this.getActiveServerUrl());
+    }
   },
 
-  connect() {
-    if (this.socket) return this.socket;
-    if (typeof io === 'undefined') {
-      console.warn('Socket.IO client library is not loaded.');
+  offStatusChange(cb) {
+    this.statusListeners.delete(cb);
+  },
+
+  _setStatus(status) {
+    this.connectionStatus = status;
+    const url = this.getActiveServerUrl();
+    for (const cb of this.statusListeners) {
+      try { cb(status, url); } catch (e) { console.error(e); }
+    }
+  },
+
+  getInitialRoomCode() {
+    if (typeof window === 'undefined' || !window.location) return null;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('room') || params.get('join') || params.get('code');
+      return code ? code.trim().toUpperCase().slice(0, 5) : null;
+    } catch (e) {
       return null;
     }
+  },
+
+  getServerUrl() {
+    if (typeof window === 'undefined' || !window.location) return undefined;
+
+    // 1. URL Query Param: ?server=https://...
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const serverParam = params.get('server');
+      if (serverParam) {
+        let clean = serverParam.trim().replace(/\/+$/, '');
+        if (!/^https?:\/\//i.test(clean)) clean = 'https://' + clean;
+        localStorage.setItem('typing_fighter_server_url', clean);
+        return clean;
+      }
+    } catch (e) {}
+
+    // 2. Saved in localStorage
+    const saved = localStorage.getItem('typing_fighter_server_url');
+    if (saved && saved.trim()) {
+      return saved.trim().replace(/\/+$/, '');
+    }
+
+    // 3. Injected via window.SERVER_URL
+    if (window.SERVER_URL && window.SERVER_URL.trim()) {
+      return window.SERVER_URL.trim().replace(/\/+$/, '');
+    }
+
+    // 4. Default heuristics based on current hostname
+    const host = window.location.hostname;
+    const port = window.location.port;
+
+    // Local static servers (e.g., Live Server, Vite on 5173, Python http.server on 8000)
+    if (host === 'localhost' || host === '127.0.0.1') {
+      if (port && port !== '3000') {
+        return `http://${host}:3000`;
+      }
+      return undefined; // Same origin
+    }
+
+    // If hosted on a known static-only host (Vercel, GitHub Pages, Netlify) with no saved backend URL:
+    const isStaticHost = host.endsWith('vercel.app') ||
+                         host.endsWith('github.io') ||
+                         host.endsWith('netlify.app') ||
+                         host.endsWith('pages.dev');
+
+    if (isStaticHost) {
+      // Return empty so UI can prompt user or use fallback
+      return undefined;
+    }
+
+    // When running directly from Express (Railway, Render, Koyeb, Docker, VPS)
+    return undefined; // undefined tells socket.io to connect to window.location.origin
+  },
+
+  getActiveServerUrl() {
+    const configured = this.getServerUrl();
+    if (configured) return configured;
+    if (typeof window !== 'undefined' && window.location) {
+      return window.location.origin;
+    }
+    return 'http://localhost:3000';
+  },
+
+  setServerUrl(url) {
+    if (typeof window === 'undefined') return;
+    if (!url || !url.trim()) {
+      localStorage.removeItem('typing_fighter_server_url');
+    } else {
+      let clean = url.trim().replace(/\/+$/, '');
+      if (!/^https?:\/\//i.test(clean) && !clean.startsWith('localhost')) {
+        clean = 'https://' + clean;
+      }
+      localStorage.setItem('typing_fighter_server_url', clean);
+    }
+    this.reconnect();
+  },
+
+  reconnect() {
+    if (this.socket) {
+      try {
+        this.socket.removeAllListeners();
+        this.socket.disconnect();
+      } catch (e) {}
+      this.socket = null;
+    }
+    return this.connect(true);
+  },
+
+  connect(force = false) {
+    if (this.socket && !force) return this.socket;
+
+    if (typeof io === 'undefined') {
+      console.warn('Socket.IO client library is not loaded.');
+      this._setStatus('error');
+      return null;
+    }
+
+    if (this.socket && force) {
+      try {
+        this.socket.removeAllListeners();
+        this.socket.disconnect();
+      } catch (e) {}
+      this.socket = null;
+    }
+
+    this._setStatus('connecting');
     const serverUrl = this.getServerUrl();
-    this.socket = serverUrl 
-      ? io(serverUrl, { autoConnect: true, transports: ['websocket', 'polling'] })
-      : io({ autoConnect: true, transports: ['websocket', 'polling'] });
-    return this.socket;
+
+    try {
+      const opts = {
+        autoConnect: true,
+        transports: ['websocket', 'polling'],
+        timeout: 10000,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
+      };
+
+      this.socket = serverUrl ? io(serverUrl, opts) : io(opts);
+
+      this.socket.on('connect', () => {
+        this._setStatus('connected');
+      });
+
+      this.socket.on('connect_error', (err) => {
+        console.warn('Socket connect_error:', err?.message || err);
+        this._setStatus('error');
+      });
+
+      this.socket.on('disconnect', (reason) => {
+        this._setStatus('disconnected');
+      });
+
+      return this.socket;
+    } catch (e) {
+      console.error('Failed to initialize socket:', e);
+      this._setStatus('error');
+      return null;
+    }
+  },
+
+  async testConnection(url) {
+    let target = (url || this.getActiveServerUrl()).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(target)) target = 'https://' + target;
+
+    const start = performance.now();
+    try {
+      const res = await fetch(`${target}/health`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        mode: 'cors',
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const latency = Math.round(performance.now() - start);
+        return { ok: true, latency, data };
+      }
+      return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` };
+    } catch (e) {
+      return { ok: false, error: e.message || 'Connection timeout or network error' };
+    }
   },
 
   createRoom(duration) {
@@ -45,7 +223,7 @@ const Net = {
 
   joinRoom(code) {
     const s = this.connect();
-    if (s) s.emit('joinRoom', { name: GameState.playerName, code });
+    if (s) s.emit('joinRoom', { name: GameState.playerName, code: (code || '').trim().toUpperCase() });
   },
 
   ready() {
