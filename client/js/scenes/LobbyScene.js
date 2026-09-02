@@ -248,19 +248,31 @@ class LobbyScene extends Phaser.Scene {
   }
 
   _buildServerTag(w, h) {
+    let connectTimer = null;
     const updateServerTag = (status, url) => {
       if (!this.serverTag || !this.serverTag.active) return;
       const activeUrl = url || Net.getActiveServerUrl();
       const shortUrl = activeUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '').slice(0, 36);
       if (status === 'connected') {
+        if (connectTimer) clearTimeout(connectTimer);
         this.serverTag.setText(`● Server: ${shortUrl} (Connected)`).setColor('#35ff9e');
-        if (this.errorText && this.errorText.text && this.errorText.text.includes('Connecting')) {
+        if (this.errorText && this.errorText.text && (this.errorText.text.includes('Waking up') || this.errorText.text.includes('Connecting'))) {
           this._showError('');
         }
       } else if (status === 'connecting') {
         this.serverTag.setText(`● Server: ${shortUrl} (Connecting...)`).setColor('#ffcc33');
+        if (!connectTimer) {
+          connectTimer = setTimeout(() => {
+            if (this.serverTag && this.serverTag.active && Net.connectionStatus === 'connecting') {
+              this.serverTag.setText(`● Server: ${shortUrl} (Waking up, ~30s on Render free tier)`).setColor('#ffcc33');
+              this._showError('Server is spinning up (free tier cold start). Please wait ~30s...', true);
+            }
+          }, 4000);
+        }
       } else if (status === 'error') {
+        if (connectTimer) clearTimeout(connectTimer);
         this.serverTag.setText(`● Server: ${shortUrl} (Offline / Waking up...)`).setColor('#ff4d6d');
+        this._showError('Unable to reach server yet. Render free tier takes ~30-60s to boot.', true);
       }
     };
 
@@ -284,7 +296,7 @@ class LobbyScene extends Phaser.Scene {
 
     const { width: w, height: h } = this.scale;
     this.errorText = this.add.text(w / 2, h * 0.81, msg, {
-      fontFamily: 'Rajdhani, sans-serif', fontSize: '15px', fontStyle: '700', color: '#ff4d6d'
+      fontFamily: 'Rajdhani, sans-serif', fontSize: '15px', fontStyle: '700', color: msg.includes('Connected') ? '#35ff9e' : '#ff4d6d'
     }).setOrigin(0.5);
 
     if (showConfigBtn) {
@@ -293,7 +305,7 @@ class LobbyScene extends Phaser.Scene {
         Net.wakeUpServer();
         Net.testConnection().then(res => {
           if (res.ok) {
-            this._showError('');
+            this._showError('Server is online! Connecting...', false);
             Net.reconnect();
           } else {
             this._showError(`Server still waking up: ${res.error}. Please wait 10s and retry.`, true);
@@ -314,7 +326,7 @@ class LobbyScene extends Phaser.Scene {
               this._showError('Reconnecting to server...');
               Net.testConnection().then(res => {
                 if (res.ok) {
-                  this._showError('');
+                  this._showError('Connected to new server!', false);
                 } else {
                   this._showError(`Cannot connect: ${res.error}`, true);
                 }
@@ -329,12 +341,23 @@ class LobbyScene extends Phaser.Scene {
   }
 
   _createRoom() {
-    this._showError('Connecting & creating room...');
     const socket = Net.connect();
     if (!socket) {
-      this._showError('Unable to connect to server.', true);
+      this._showError('Unable to initialize connection.', true);
       return;
     }
+
+    if (!socket.connected) {
+      this._showError('Waking up cloud server (Render free tier takes ~30s)... Connecting...', true);
+      Net.wakeUpServer();
+      socket.once('connect', () => {
+        this._showError('Connected! Creating room...');
+        Net.createRoom(GameState.duration);
+      });
+      return;
+    }
+
+    this._showError('Creating room...');
     Net.createRoom(GameState.duration);
   }
 
@@ -343,12 +366,24 @@ class LobbyScene extends Phaser.Scene {
       this._showError('Enter a valid 5-character room code.');
       return;
     }
-    this._showError('Connecting & joining room...');
+
     const socket = Net.connect();
     if (!socket) {
-      this._showError('Unable to connect to server.', true);
+      this._showError('Unable to initialize connection.', true);
       return;
     }
+
+    if (!socket.connected) {
+      this._showError('Waking up cloud server (Render free tier takes ~30s)... Connecting...', true);
+      Net.wakeUpServer();
+      socket.once('connect', () => {
+        this._showError('Connected! Joining room...');
+        Net.joinRoom(this.joinCode);
+      });
+      return;
+    }
+
+    this._showError('Joining room...');
     Net.joinRoom(this.joinCode);
   }
 

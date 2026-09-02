@@ -183,11 +183,11 @@ const Net = {
     try {
       const opts = {
         autoConnect: true,
-        transports: ['websocket', 'polling'],
-        timeout: 25000,
+        transports: ['polling', 'websocket'],
+        timeout: 35000,
         reconnection: true,
-        reconnectionAttempts: 20,
-        reconnectionDelay: 1500,
+        reconnectionAttempts: 30,
+        reconnectionDelay: 1000,
         reconnectionDelayMax: 5000
       };
 
